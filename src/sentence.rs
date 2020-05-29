@@ -10,29 +10,29 @@ use pyo3::class::sequence::PySequenceProtocol;
 use pyo3::exceptions;
 use pyo3::prelude::*;
 
-use crate::lemma::PyEditTree;
-use crate::util::ListVec;
+use bincode2::{deserialize, serialize};
 
-/// Sentence that can be annotated.
-#[pyclass(name = Sentence)]
+use edit_tree_py::PyEditTree;
+
+use pyo3::types::PyBytes;
+
+/// Sentence representation
+#[pyclass(module = "conllx", name=Sentence)]
+#[derive(Clone)]
 pub struct PySentence {
     inner: Rc<RefCell<Sentence>>,
 }
 
 #[pymethods]
 impl PySentence {
-    /// Construct a new sentence from forms and (optionally) POS tags.
+    /// Construct a new sentence from forms, POS and lemmas.
     ///
-    /// The constructor will throw a `ValueError` if POS tags are
-    /// provided, but the number or tags is not equal to the number of
-    /// tokens.
     #[new]
-    fn __new__(
-        obj: &PyRawObject,
-        forms: ListVec<&str>,
-        pos_tags: Option<ListVec<&str>>,
-        lemmas: Option<ListVec<&str>>,
-    ) -> PyResult<()> {
+    fn new(
+        forms: Vec<&str>,
+        pos_tags: Option<Vec<&str>>,
+        lemmas: Option<Vec<&str>>,
+    ) -> PyResult<Self> {
         let sent = match (pos_tags, lemmas) {
             (Some(pos_tags), Some(lemmas)) => {
                 if forms.len() != pos_tags.len() {
@@ -50,10 +50,9 @@ impl PySentence {
                     )));
                 }
                 forms
-                    .into_inner()
                     .into_iter()
-                    .zip(pos_tags.into_inner())
-                    .zip(lemmas.into_inner())
+                    .zip(pos_tags)
+                    .zip(lemmas)
                     .map(|((form, pos_tag), lemma)| {
                         TokenBuilder::new(form).pos(pos_tag).lemma(lemma).into()
                     })
@@ -68,9 +67,8 @@ impl PySentence {
                     )));
                 }
                 forms
-                    .into_inner()
                     .into_iter()
-                    .zip(lemmas.into_inner())
+                    .zip(lemmas)
                     .map(|(form, lemma)| TokenBuilder::new(form).lemma(lemma).into())
                     .collect::<Sentence>()
             }
@@ -83,33 +81,60 @@ impl PySentence {
                     )));
                 }
                 forms
-                    .into_inner()
                     .into_iter()
-                    .zip(pos_tags.into_inner())
+                    .zip(pos_tags)
                     .map(|(form, pos_tag)| TokenBuilder::new(form).pos(pos_tag).into())
                     .collect::<Sentence>()
             }
-            (None, None) => forms
-                .into_inner()
-                .into_iter()
-                .map(Token::new)
-                .collect::<Sentence>(),
+            (None, None) => forms.into_iter().map(Token::new).collect::<Sentence>(),
         };
 
-        obj.init(PySentence {
+        Ok(PySentence {
             inner: Rc::new(sent.into()),
-        });
+        })
+    }
 
-        Ok(())
+    pub fn __setstate__(&mut self, py: Python, state: PyObject) -> PyResult<()> {
+        match state.extract::<&PyBytes>(py) {
+            Ok(s) => {
+                self.inner = deserialize(s.as_bytes()).unwrap();
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn __getstate__(&self, py: Python) -> PyResult<PyObject> {
+        Ok(PyBytes::new(py, &serialize(&self.inner).unwrap()).to_object(py))
+    }
+
+    #[staticmethod]
+    pub fn __getnewargs__<'a>() -> (Vec<&'a str>,) {
+        (vec![""],)
+    }
+
+    pub fn terminals(&mut self) -> TerminalIterator {
+        TerminalIterator {
+            sent : self.inner.clone(),
+            idx:1
+        }
+    }
+
+    pub fn forms(&mut self) -> FormIterator {
+        FormIterator {
+            sent : self.inner.clone(),
+            idx:1
+        }
     }
 }
 
 impl PySentence {
-    pub fn new(sent: Sentence) -> Self {
+    pub fn construct_sent(sent: Sentence) -> Self {
         PySentence {
             inner: Rc::new(sent.into()),
         }
     }
+
     pub fn inner(&self) -> RefMut<Sentence> {
         self.inner.borrow_mut()
     }
@@ -163,6 +188,77 @@ impl PySequenceProtocol for PySentence {
         }
     }
 }
+
+
+/// Iterator over the terminal nodes in a dependency graph.
+///
+/// The nodes are returned in sentence-linear order.
+#[pyclass(name = FormIterator)]
+pub struct FormIterator {
+    sent: Rc<RefCell<Sentence>>,
+    idx: usize,
+}
+
+#[pyproto]
+impl PyIterProtocol for FormIterator {
+    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<FormIterator>> {
+        Ok(slf.into())
+    }
+
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<String>> {
+        let slf = &mut *slf;
+
+        if slf.idx < slf.sent.borrow().len() {
+            let token = PyToken {
+                sent: slf.sent.clone(),
+                token_idx: slf.idx,
+            };
+
+            slf.idx += 1;
+
+            Ok(token.get_form())
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+
+
+
+/// Iterator over the terminal nodes in a dependency graph.
+///
+/// The nodes are returned in sentence-linear order.
+#[pyclass(name = TerminalIterator)]
+pub struct TerminalIterator {
+    sent: Rc<RefCell<Sentence>>,
+    idx: usize,
+}
+
+#[pyproto]
+impl PyIterProtocol for TerminalIterator {
+    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<TerminalIterator>> {
+        Ok(slf.into())
+    }
+
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyToken>> {
+        let slf = &mut *slf;
+
+        if slf.idx < slf.sent.borrow().len() {
+            let token = PyToken {
+                sent: slf.sent.clone(),
+                token_idx: slf.idx,
+            };
+
+            slf.idx += 1;
+
+            Ok(Some(token))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 
 /// Iterator over the nodes in a dependency graph.
 ///
@@ -280,7 +376,7 @@ impl PyToken {
                 token.set_lemma(Some(lemma));
                 Ok(())
             }
-            None=> Err(exceptions::Exception::py_err("cannot set pos of root")),
+            None => Err(exceptions::Exception::py_err("cannot set pos of root")),
         }
     }
 
@@ -291,7 +387,7 @@ impl PyToken {
                     Some(lemma) => lemma,
                     None => token.form(),
                 };
-                Ok(PyEditTree::new(token.form().chars(), lemma.chars()))
+                Ok(PyEditTree::__new__(token.form(), lemma))
             }
             Node::Root => Err(exceptions::Exception::py_err(
                 "cannot compute edit tree for root",
@@ -436,10 +532,7 @@ impl PyMappingProtocol for PyFeatures {
             token.set_features(Some(Features::default()));
         }
 
-        token
-            .features_mut()
-            .unwrap()
-            .insert(name.to_owned(), Some(value.to_owned()));
+        token.features_mut().unwrap().insert(name, Some(value));
 
         Ok(())
     }

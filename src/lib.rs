@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 
 mod util;
-pub use util::ListVec;
 
 mod sentence;
 pub use sentence::{PySentence, PySentenceIterator, PyToken};
@@ -12,8 +11,7 @@ use decoder::{PyDecoder, PyLabel};
 mod reader;
 use reader::PyDataIterator;
 
-mod lemma;
-use lemma::PyEditTree;
+use edit_tree_py::PyEditTree;
 
 /// This is a Python module for wrapping the sticker sequence labeler.
 #[pymodule]

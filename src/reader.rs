@@ -29,7 +29,7 @@ impl PyIterProtocol for PyDataIterator {
     fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PySentence>> {
         match slf.dataset.next() {
             Some(sent) => match sent {
-                Ok(sent) => Ok(Some(PySentence::new(sent))),
+                Ok(sent) => Ok(Some(PySentence::construct_sent(sent))),
                 _ => Err(exceptions::Exception::py_err("reading failed")),
             },
             None => Ok(None),
@@ -39,27 +39,11 @@ impl PyIterProtocol for PyDataIterator {
 
 #[pymethods]
 impl PyDataIterator {
-    /// Construct a new sentence from forms and (optionally) POS tags.
-    ///
-    /// The constructor will throw a `ValueError` if POS tags are
-    /// provided, but the number or tags is not equal to the number of
-    /// tokens.
     #[new]
-    fn __new__(
-        obj: &PyRawObject,
-        path: &str,
-        max_len: Option<usize>,
-        shuffle_buffer_size: Option<usize>,
-    ) -> PyResult<()> {
-        obj.init(PyDataIterator {
-            dataset: ConllxDataSet::get_sentence_iter(
-                path.to_string(),
-                max_len,
-                shuffle_buffer_size,
-            ),
-        });
-
-        Ok(())
+    fn __new__(path: &str, max_len: Option<usize>, shuffle_buffer_size: Option<usize>) -> Self {
+        PyDataIterator {
+            dataset: ConllxDataSet::get_sentence_iter(path, max_len, shuffle_buffer_size),
+        }
     }
 }
 
@@ -75,12 +59,12 @@ impl ConllxDataSet {
     ///
     /// If `max_len` == `None`, no filtering is performed.
     fn get_sentence_iter<'ds, 'a: 'ds>(
-        reader: String,
+        path: &str,
         max_len: Option<usize>,
         shuffle_buffer_size: Option<usize>,
     ) -> Box<dyn Iterator<Item = Fallible<Sentence>> + 'ds>
 where {
-        let f = File::open(reader).unwrap();
+        let f = File::open(path).unwrap();
         let f = BufReader::new(f);
         let r = Reader::new(f);
         let tokenized_sentences = r.sentences();

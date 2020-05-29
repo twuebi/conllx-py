@@ -1,11 +1,10 @@
-use pyo3::exceptions;
 use pyo3::prelude::*;
 
-use crate::{ListVec, PySentence};
-use pyo3::types::PyAny;
-use std::ops::Deref;
+use crate::PySentence;
+use std::ops::{Deref, DerefMut};
 use sticker_encoders::deprel::{DependencyEncoding, RelativePOS, RelativePOSEncoder};
 use sticker_encoders::{EncodingProb, SentenceDecoder};
+use sticker_encoders::deprel::POSLayer;
 
 /// Decodes RelativePOS labels
 #[pyclass(name = Decoder)]
@@ -16,27 +15,19 @@ pub struct PyDecoder {
 #[pymethods]
 impl PyDecoder {
     #[new]
-    pub fn new(obj: &PyRawObject) -> PyResult<()> {
-        obj.init(PyDecoder {
-            inner: RelativePOSEncoder,
-        });
-        Ok(())
+    pub fn new() -> Self {
+        PyDecoder {
+            inner: RelativePOSEncoder::new(POSLayer::Pos, "root"),
+        }
     }
 
     /// Decode the Sentence - Label pairs
     fn decode_sentences(
         &self,
-        sentences: Vec<&PySentence>,
-        labels: ListVec<ListVec<ListVec<PyLabel>>>,
+        mut sentences: Vec<PyRefMut<PySentence>>,
+        labels: Vec<Vec<Vec<PyLabel>>>,
     ) -> PyResult<()> {
-        // We need borrowed_sents to exist as long as sents, since the
-        // lifetimes of sentences are bound to RefMut returned by
-        // PySentence::inner.
-        let mut borrowed_sents = sentences
-            .into_iter()
-            .map(|sent| sent.inner())
-            .collect::<Vec<_>>();
-        let _ = borrowed_sents
+        let _ = sentences
             .iter_mut()
             .zip(labels.deref())
             .map(|(sent, sent_labels)| {
@@ -49,7 +40,7 @@ impl PyDecoder {
                             .collect::<Vec<EncodingProb<DependencyEncoding<RelativePOS>>>>()
                     })
                     .collect::<Vec<Vec<_>>>();
-                self.inner.decode(&sent_labels, s)
+                self.inner.decode(&sent_labels, s.inner().deref_mut())
             })
             .collect::<Vec<_>>();
         Ok(())
@@ -69,29 +60,13 @@ pub struct PyLabel {
 #[pymethods]
 impl PyLabel {
     #[new]
-    fn new(
-        obj: &PyRawObject,
-        distance: isize,
-        pos: &str,
-        relation: &str,
-        probability: f32,
-    ) -> PyResult<()> {
-        obj.init(PyLabel {
+    fn new(distance: isize, pos: &str, relation: &str, probability: f32) -> Self {
+        PyLabel {
             distance,
             pos: pos.to_string(),
             relation: relation.to_string(),
             probability,
-        });
-        Ok(())
-    }
-}
-
-impl<'a> FromPyObject<'a> for PyLabel {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
-        let py_label = ob
-            .downcast_ref::<PyLabel>()
-            .map_err(|_| exceptions::TypeError::py_err("argument of type 'list' expected"))?;
-        Ok(py_label.to_owned())
+        }
     }
 }
 
